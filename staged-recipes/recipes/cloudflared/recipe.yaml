@@ -1,0 +1,80 @@
+context:
+  name: cloudflared
+  version: "2026.10.0"
+  # The updater refuses to self-update when BuiltForPackageManager is set, so
+  # conda stays in charge of the installed binary.
+  ldflags: >-
+    -s -w
+    -X main.Version=${{ version }}
+    -X github.com/cloudflare/cloudflared/cmd/cloudflared/updater.BuiltForPackageManager=conda-forge
+
+package:
+  name: ${{ name }}
+  version: ${{ version }}
+
+source:
+  url: https://github.com/cloudflare/cloudflared/archive/refs/tags/${{ version }}.tar.gz
+  sha256: 60203c146da07015fda8b1c583939828913f1310d63716666124a89c0f86bd8c
+
+build:
+  number: 0
+  script:
+    content:
+      - go-licenses save ./cmd/cloudflared --save_path ./library_licenses --ignore github.com/cloudflare/cloudflared
+      - if: unix
+        then:
+          # Same build timestamp source as upstream's Makefile.
+          - BUILD_TIME=$(date -u -r RELEASE_NOTES +%Y-%m-%dT%H:%M:%SZ)
+          - go build -mod=readonly -trimpath -o $PREFIX/bin/cloudflared -ldflags="${{ ldflags }} -X main.BuildTime=${BUILD_TIME}" ./cmd/cloudflared
+          - mkdir -p $PREFIX/share/man/man1
+          - MAN_DATE=$(date -u -r RELEASE_NOTES +%Y-%m-%d)
+          - sed -e "s/[$]{VERSION}/${{ version }}/" -e "s/[$]{DATE}/${MAN_DATE}/" cloudflared_man_template > $PREFIX/share/man/man1/cloudflared.1
+        else:
+          - for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "(Get-Item RELEASE_NOTES).LastWriteTimeUtc.ToString('s') + 'Z'"`) do set "BUILD_TIME=%%i"
+          - go build -mod=readonly -trimpath -o %LIBRARY_BIN%\cloudflared.exe -ldflags="${{ ldflags }} -X main.BuildTime=%BUILD_TIME%" ./cmd/cloudflared
+          - if errorlevel 1 exit 1
+
+requirements:
+  build:
+    - ${{ compiler('go-nocgo') }}
+    - go-licenses
+
+tests:
+  - script:
+      - cloudflared --version
+      - cloudflared help
+      - if: unix
+        then:
+          - cloudflared --version | grep -F "${{ version }}"
+          # Self-update must be disabled for conda-managed installs.
+          - cloudflared update 2>&1 | grep -F "installed by conda-forge"
+        else:
+          - cloudflared --version | findstr /C:"${{ version }}"
+          - cloudflared update 2>&1 | findstr /C:"installed by conda-forge"
+  - package_contents:
+      bin:
+        - cloudflared
+      files:
+        - if: unix
+          then:
+            - share/man/man1/cloudflared.1
+      strict: true
+
+about:
+  homepage: https://github.com/cloudflare/cloudflared
+  repository: https://github.com/cloudflare/cloudflared
+  documentation: https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/
+  license: Apache-2.0
+  license_file:
+    - LICENSE
+    - library_licenses/
+  summary: Cloudflare Tunnel client (formerly Argo Tunnel)
+  description: |
+    cloudflared is the command-line client for Cloudflare Tunnel, a tunneling
+    daemon that proxies traffic from the Cloudflare network to your origins
+    without opening inbound ports on your firewall. It can also be used to
+    reach Tunnel origins over TCP (SSH, RDP, etc.) via `cloudflared access`.
+
+extra:
+  recipe-maintainers:
+    - mahf708
